@@ -1,0 +1,12 @@
+From: <username>
+To: <username>
+Subject: <subject string>
+Received: 2024-05-09:14:08
+<Message body - one or more lines>
+.
+From: <username>
+To: <username>
+Subject: <subject string>
+Received: 2024-05-09:14:08
+<Message body - one or more lines>
+.

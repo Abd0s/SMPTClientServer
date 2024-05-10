@@ -1,0 +1,4 @@
+async-timeout==4.0.3
+portalocker==2.8.2
+pywin32==306
+redis==5.0.4
