@@ -1,19 +1,19 @@
 [![Review Assignment Due Date](https://classroom.github.com/assets/deadline-readme-button-24ddc0f5d75046c5622901739e7c5dd533143b0c8e959d652212380cedb1ea36.svg)](https://classroom.github.com/a/Mp-Kos87)
 
 # About
-This repositry contains a basic implementation of a Smtp server, POP3 server and a mail client to interact with the servers
+A basic implementation of a Smtp server, POP3 server and a mail client to interact with the servers
 
 # Requirements
 
-Only tested on Python 3.10 and Windows
+This project has only tested on Python 3.10 and Windows.
 
-Install the required dependecies using pip.
+Install the required dependencies using pip.
 ```bash
 pip install -r requirements.txt
 ```
 
 # Setup
-Add mail users by adding them to the `userinfo.txt` file in the `<username> <password` format and creating a <username>/mailbox.txt inside the users directory
+Add mail users by adding them to the `userinfo.txt` file in the `<username> <password` format and creating a `<username>/mailbox.txt` file inside the users directory
 
 ## Usage
 
