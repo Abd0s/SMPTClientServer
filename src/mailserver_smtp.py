@@ -1,3 +1,8 @@
+"""A basic SMTP mail server
+
+Implements a basic SMTP server with process level mailbox locking.
+"""
+
 import sys
 import socket
 import threading

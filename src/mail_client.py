@@ -1,8 +1,15 @@
+"""Basic clients for POP3 and SMTP and a mail client on top
+
+This module implements basic clients fir the POP3 and SMTP protools.
+On top of that there is a mail client CLI interface for basic mail and mailbox operations.
+"""
+
 import socket
 import traceback
 import argparse
 import sys
 from typing import NamedTuple
+
 
 class Mail(NamedTuple):
     sender: str
@@ -10,15 +17,17 @@ class Mail(NamedTuple):
     subject: str
     received_date: str
     body: str
-    
+
+
 def parse_mail(mail_data: str) -> Mail:
     lines = mail_data.splitlines()
     sender = lines[0].split()[1]
     receiver = lines[1].split()[1]
     subject = lines[2].split()[1]
-    received_data = lines[3].split()[1]    
+    received_data = lines[3].split()[1]
     body = "\n".join(lines[4:])
     return Mail(sender, receiver, subject, received_data, body)
+
 
 class ProgramArgs(argparse.Namespace):
     ip_address: str
@@ -189,9 +198,9 @@ class Pop3Client(BaseClient):
 
     def close(self) -> None:
         self.pop3_QUIT()
-        self.server_socket.close()    
-        
-    def read_data(self) -> str:        
+        self.server_socket.close()
+
+    def read_data(self) -> str:
         # Remove extraneous carriage returns and de-transparency according
         data = self._read_until(b"\r\n.\r\n")
         if data:
@@ -220,7 +229,7 @@ class Pop3Client(BaseClient):
             return (int(message.split()[0]), int(message.split()[1]))
         else:
             raise RuntimeError(f"Failed STAT command: {message}")
-            
+
     def pop3_LIST(self, mail_n: int | None = None) -> list[tuple[int, int]]:
         if mail_n:
             self.send_command(f"LIST {mail_n}")
@@ -233,7 +242,11 @@ class Pop3Client(BaseClient):
             self.send_command("LIST")
             status, message = self._handle_response()
             if status:
-                return [(int(line.split()[0]), int(line.split()[1])) for line in self.read_data().split(self._newline) if line]
+                return [
+                    (int(line.split()[0]), int(line.split()[1]))
+                    for line in self.read_data().split(self._newline)
+                    if line
+                ]
             else:
                 raise RuntimeError(f"Failed LIST command: {message}")
 
@@ -306,10 +319,10 @@ def mail_sending_cli(args: ProgramArgs) -> None:
 
     smpt_client.close()
 
+
 def mail_management_cli(args) -> None:
     user_name = input("Enter username: ")
     password = input("Enter password: ")
-
 
     try:
         pop3_client = Pop3Client(args.ip_address, args.pop3_port)
@@ -334,7 +347,9 @@ def mail_management_cli(args) -> None:
     for mail_n in range(1, mail_count + 1):
         mail_data = pop3_client.pop3_RETR(mail_n)
         mail = parse_mail(mail_data)
-        print(f"{mail_n: <5} {mail.sender: <20} {mail.received_date: <17} {mail.subject}")
+        print(
+            f"{mail_n: <5} {mail.sender: <20} {mail.received_date: <17} {mail.subject}"
+        )
 
     print("--------------------------")
 
@@ -355,7 +370,9 @@ def mail_management_cli(args) -> None:
             if command_option in ["1", "2", "3", "4", "5", "6"]:
                 break
             else:
-                print("Invalid command option, please choose one of the command options.")
+                print(
+                    "Invalid command option, please choose one of the command options."
+                )
 
         if command_option == "1":
             result = pop3_client.pop3_STAT()
@@ -363,11 +380,13 @@ def mail_management_cli(args) -> None:
         elif command_option == "2":
             while True:
                 try:
-                    email_n = int(input("Enter a valid email number or 0 for all mails: "))
+                    email_n = int(
+                        input("Enter a valid email number or 0 for all mails: ")
+                    )
                     break
                 except ValueError:
                     print("Not a valid number, try again.")
-            try:            
+            try:
                 if email_n == 0:
                     result = pop3_client.pop3_LIST()
                 else:
@@ -384,7 +403,7 @@ def mail_management_cli(args) -> None:
                     break
                 except ValueError:
                     print("Not a valid number, try again.")
-            try:            
+            try:
                 result = pop3_client.pop3_RETR(email_n)
                 print("-- START OF MAIL ---")
                 print(result)
@@ -399,20 +418,19 @@ def mail_management_cli(args) -> None:
                 except ValueError:
                     print("Not a valid number, try again.")
             print(pop3_client.pop3_DELE(email_n))
-            
+
         elif command_option == "5":
             print(pop3_client.pop3_RSET())
         elif command_option == "6":
             print(pop3_client.pop3_QUIT())
             pop3_client.server_socket.close()
             return
-            
+
 
 def mail_searching_cli(args) -> None:
     pass
     user_name = input("Enter username: ")
     password = input("Enter password: ")
-
 
     try:
         pop3_client = Pop3Client(args.ip_address, args.pop3_port)
@@ -430,7 +448,6 @@ def mail_searching_cli(args) -> None:
 
     print(f"Succesfully authenticated as {user_name}!")
 
-
     # Collect all mails
     mails: list[Mail] = []
     mails_data: list[str] = []
@@ -442,7 +459,7 @@ def mail_searching_cli(args) -> None:
         mails.append(mail)
 
     pop3_client.close()
-        
+
     # Interactive commands
     while True:
         # Option menu
@@ -458,7 +475,9 @@ def mail_searching_cli(args) -> None:
             if command_option in ["1", "2", "3", "4"]:
                 break
             else:
-                print("Invalid command option, please choose one of the command options.")    
+                print(
+                    "Invalid command option, please choose one of the command options."
+                )
 
         if command_option == "1":
             query = input("Enter the words/sentences to search for: ")
@@ -474,7 +493,7 @@ def mail_searching_cli(args) -> None:
                     print("-- START OF MAIL ---")
                     print(mails_data[index])
                     print("--- END OF MAIL ---")
-                    
+
         elif command_option == "3":
             query = input("Enter the address to search for: ")
             for index, mail in enumerate(mails):
@@ -484,8 +503,8 @@ def mail_searching_cli(args) -> None:
                     print("--- END OF MAIL ---")
         elif command_option == "4":
             return
-            
-        
+
+
 def user_interaction(args) -> None:
     # Ask for authentication information
 

@@ -1,7 +1,11 @@
+"""Miscellaneous utilities
+    
+"""
+
 import logging
 
 def setup_logger() -> None:
-
+    """Setup the default Python logger"""
     # create logger
     logger: logging.Logger = logging.getLogger()
     logger.setLevel(logging.DEBUG)
