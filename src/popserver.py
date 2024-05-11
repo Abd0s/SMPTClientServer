@@ -238,18 +238,18 @@ class ConnectionHandle(threading.Thread):
 
     def pop3_LIST(self, args: list[str]) -> None:
         if self.pop3_state == self.TRANSACTION:
-            if not args:
+            if args:
                 try:
-                    self.send_postive_response(f"{args[0]} {len(self.maildrop[int(args[0]) + 1].encode('utf-8'))}")
+                    self.send_postive_response(f"{args[0]} {len(self.maildrop[int(args[0]) - 1].encode('utf-8'))}")
                 except IndexError:
-                    self.send_negative_response(f"No such mail, only {len(self.maildrop)} mails in maildro")
+                    self.send_negative_response(f"No such mail, only {len(self.maildrop)} mails in maildrop")
                 except ValueError:
                     self.send_negative_response("Invalid argument, must be an integer")
             else:
                 self.send_postive_response(f"{len(self.maildrop)} mails")
                 for index, mail in enumerate(self.maildrop, 1):
                     self.send_response(f"{index} {len(mail.encode('utf-8'))}")
-                self.send_response(".\r\n")
+                self.send_response(".")
         else:
             self.send_negative_response("Not in transaction state, use USER/PASS first to authenticate")
             
@@ -275,7 +275,7 @@ class ConnectionHandle(threading.Thread):
                 try:
                     if self.maildrop[int(args[0]) - 1]:
                         self.maildrop[int(args[0]) - 1] = ""
-                        self.send_postive_response("Message {args[0]} deleted")
+                        self.send_postive_response(f"Message {args[0]} deleted")
                     else:
                         self.send_negative_response(f"Message {args[0]} already deleted")
                 except IndexError:

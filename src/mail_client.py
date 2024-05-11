@@ -2,11 +2,28 @@ import socket
 import traceback
 import argparse
 import sys
+from typing import NamedTuple
 
+class Mail(NamedTuple):
+    sender: str
+    receiver: str
+    subject: str
+    received_date: str
+    body: str
+    
+def parse_mail(mail_data: str) -> Mail:
+    lines = mail_data.splitlines()
+    sender = lines[0].split()[1]
+    receiver = lines[1].split()[1]
+    subject = lines[2].split()[1]
+    received_data = lines[3].split()[1]    
+    body = "\n".join(lines[4:])
+    return Mail(sender, receiver, subject, received_data, body)
 
 class ProgramArgs(argparse.Namespace):
     ip_address: str
-    port: int
+    pop3_port: int
+    smtp_port: int
 
 
 class BaseClient:
@@ -120,7 +137,7 @@ class SmptClient(BaseClient):
 
 class Pop3Client(BaseClient):
     def __init__(self, ip_address: str, port: int) -> None:
-        super().__init__(debug=True)
+        super().__init__(debug=False)
 
         try:
             self.server_socket.connect((ip_address, port))
@@ -160,7 +177,7 @@ class Pop3Client(BaseClient):
             except IndexError:
                 return (False, "")
         else:
-            raise RuntimeError(f"Unexpected response: {response}")
+            raise RuntimeError(f"Unexpected response: `{response}`")
 
     def authenticate(self, user: str, password: str) -> None:
         status, message = self.pop3_USER(user)
@@ -196,62 +213,58 @@ class Pop3Client(BaseClient):
         self.send_command(f"PASS {passowrd}")
         return self._handle_response()
 
-    def pop3_STAT(self) -> None:
+    def pop3_STAT(self) -> tuple[int, int]:
         self.send_command("STAT")
-        response = self._read_until(self.terminator)
-        if response is None:
-            raise RuntimeError("Unexpected socket closure")
+        status, message = self._handle_response()
+        if status:
+            return (int(message.split()[0]), int(message.split()[1]))
         else:
-            print(response)
-
-    def pop3_LIST(self, mail_n: int | None = None) -> str:
+            raise RuntimeError(f"Failed STAT command: {message}")
+            
+    def pop3_LIST(self, mail_n: int | None = None) -> list[tuple[int, int]]:
         if mail_n:
             self.send_command(f"LIST {mail_n}")
             status, message = self._handle_response()
             if status:
-                return message
+                return [(int(message.split()[0]), int(message.split()[1]))]
             else:
                 raise RuntimeError(f"Failed LIST command: {message}")
         else:
             self.send_command("LIST")
             status, message = self._handle_response()
             if status:
-                return self.read_data()
+                return [(int(line.split()[0]), int(line.split()[1])) for line in self.read_data().split(self._newline) if line]
             else:
                 raise RuntimeError(f"Failed LIST command: {message}")
 
     def pop3_RETR(self, mail_n: int) -> str:
         self.send_command(f"RETR {mail_n}")
-
         status, message = self._handle_response()
         if status:
             return self.read_data()
         else:
             raise RuntimeError(f"Failed RETR command: {message}")
 
-    def pop3_DELE(self, mail_n: int) -> None:
+    def pop3_DELE(self, mail_n: int) -> str:
         self.send_command(f"DELE {mail_n}")
         response = self._read_until(self.terminator)
         if response is None:
             raise RuntimeError("Unexpected socket closure")
-        else:
-            print(response)
+        return response
 
-    def pop3_RSET(self) -> None:
+    def pop3_RSET(self) -> str:
         self.send_command("RSET")
         response = self._read_until(self.terminator)
         if response is None:
             raise RuntimeError("Unexpected socket closure")
-        else:
-            print(response)
+        return response
 
-    def pop3_QUIT(self) -> None:
+    def pop3_QUIT(self) -> str:
         self.send_command("QUIT")
         response = self._read_until(self.terminator)
         if response is None:
             raise RuntimeError("Unexpected socket closure")
-        else:
-            print(response)
+        return response
 
 
 def mail_sending_cli(args: ProgramArgs) -> None:
@@ -277,7 +290,7 @@ def mail_sending_cli(args: ProgramArgs) -> None:
 
     # Create SMPT client
     try:
-        smpt_client = SmptClient(args.ip_address, args.port)
+        smpt_client = SmptClient(args.ip_address, args.smtp_port)
     except Exception:
         print("Error creating smpt client")
         traceback.print_exc()
@@ -293,14 +306,13 @@ def mail_sending_cli(args: ProgramArgs) -> None:
 
     smpt_client.close()
 
-
 def mail_management_cli(args) -> None:
     user_name = input("Enter username: ")
     password = input("Enter password: ")
 
 
     try:
-        pop3_client = Pop3Client(args.ip_address, args.port)
+        pop3_client = Pop3Client(args.ip_address, args.pop3_port)
     except Exception:
         print("Error creating smpt client")
         traceback.print_exc()
@@ -315,16 +327,165 @@ def mail_management_cli(args) -> None:
 
     print(f"Succesfully authenticated as {user_name}!")
 
-    pop3_client.pop3_STAT()
-    pop3_client.pop3_LIST()
-    print(pop3_client.pop3_RETR(1))
+    # Retreive and list all mails
+    mail_count = pop3_client.pop3_STAT()[0]
+    print(f"--- {mail_count} mails in inbox ---")
+    print(f"{'No.': <5} {'Sender': <20} {'Recieved at': <17} Subject")
+    for mail_n in range(1, mail_count + 1):
+        mail_data = pop3_client.pop3_RETR(mail_n)
+        mail = parse_mail(mail_data)
+        print(f"{mail_n: <5} {mail.sender: <20} {mail.received_date: <17} {mail.subject}")
 
-    pop3_client.close()
+    print("--------------------------")
+
+    # Interactive commands
+    while True:
+        # Option menu
+        print("--- POP3 Mail Management ---")
+        print("")
+        print("[1] STAT")
+        print("[2] LIST")
+        print("[3] RETR")
+        print("[4] DELE")
+        print("[5] RSET")
+        print("[6] QUIT")
+
+        while True:
+            command_option = input("Enter an command option: ")
+            if command_option in ["1", "2", "3", "4", "5", "6"]:
+                break
+            else:
+                print("Invalid command option, please choose one of the command options.")
+
+        if command_option == "1":
+            result = pop3_client.pop3_STAT()
+            print(f"{result[0]} Mails ({result[1]} octets)")
+        elif command_option == "2":
+            while True:
+                try:
+                    email_n = int(input("Enter a valid email number or 0 for all mails: "))
+                    break
+                except ValueError:
+                    print("Not a valid number, try again.")
+            try:            
+                if email_n == 0:
+                    result = pop3_client.pop3_LIST()
+                else:
+                    result = pop3_client.pop3_LIST(email_n)
+                print("Mail list:")
+                for mail in result:
+                    print(f"{mail[0]} ({mail[1]} octets)")
+            except RuntimeError as e:
+                print(repr(e))
+        elif command_option == "3":
+            while True:
+                try:
+                    email_n = int(input("Enter a valid email number: "))
+                    break
+                except ValueError:
+                    print("Not a valid number, try again.")
+            try:            
+                result = pop3_client.pop3_RETR(email_n)
+                print("-- START OF MAIL ---")
+                print(result)
+                print("--- END OF MAIL ---")
+            except RuntimeError as e:
+                print(repr(e))
+        elif command_option == "4":
+            while True:
+                try:
+                    email_n = int(input("Enter a valid email number: "))
+                    break
+                except ValueError:
+                    print("Not a valid number, try again.")
+            print(pop3_client.pop3_DELE(email_n))
+            
+        elif command_option == "5":
+            print(pop3_client.pop3_RSET())
+        elif command_option == "6":
+            print(pop3_client.pop3_QUIT())
+            pop3_client.server_socket.close()
+            return
+            
 
 def mail_searching_cli(args) -> None:
     pass
+    user_name = input("Enter username: ")
+    password = input("Enter password: ")
 
 
+    try:
+        pop3_client = Pop3Client(args.ip_address, args.pop3_port)
+    except Exception:
+        print("Error creating smpt client")
+        traceback.print_exc()
+        return
+
+    try:
+        pop3_client.authenticate(user_name, password)
+    except RuntimeError as e:
+        print(repr(e))
+        pop3_client.close()
+        return
+
+    print(f"Succesfully authenticated as {user_name}!")
+
+
+    # Collect all mails
+    mails: list[Mail] = []
+    mails_data: list[str] = []
+    mail_count = pop3_client.pop3_STAT()[0]
+    for mail_n in range(1, mail_count + 1):
+        mail_data = pop3_client.pop3_RETR(mail_n)
+        mails_data.append(mail_data)
+        mail = parse_mail(mail_data)
+        mails.append(mail)
+
+    pop3_client.close()
+        
+    # Interactive commands
+    while True:
+        # Option menu
+        print("--- POP3 Mail Search ---")
+        print("")
+        print("[1] Words/sentences")
+        print("[2] Datatime")
+        print("[3] Address")
+        print("[4] Go back")
+
+        while True:
+            command_option = input("Enter an command option: ")
+            if command_option in ["1", "2", "3", "4"]:
+                break
+            else:
+                print("Invalid command option, please choose one of the command options.")    
+
+        if command_option == "1":
+            query = input("Enter the words/sentences to search for: ")
+            for mail in mails_data:
+                if query in mail:
+                    print("-- START OF MAIL ---")
+                    print(mail)
+                    print("--- END OF MAIL ---")
+        elif command_option == "2":
+            query = input("Enter the time to search for (YYYY-MM-DD): ")
+            for index, mail in enumerate(mails):
+                if query == mail.received_date[:10]:
+                    print("-- START OF MAIL ---")
+                    print(mails_data[index])
+                    print("--- END OF MAIL ---")
+                    
+        elif command_option == "3":
+            query = input("Enter the address to search for: ")
+            for index, mail in enumerate(mails):
+                if query == mail.sender:
+                    print("-- START OF MAIL ---")
+                    print(mails_data[index])
+                    print("--- END OF MAIL ---")
+        elif command_option == "4":
+            return
+            
+        
 def user_interaction(args) -> None:
     # Ask for authentication information
 
@@ -332,7 +493,7 @@ def user_interaction(args) -> None:
         # Option menu
         print("- Mail client - Please choose an option from the menu:")
         print("")
-        print("[a] Mail sending:")
+        print("[a] Mail sending")
         print("[b] Mail management")
         print("[c] Mail searching")
         print("[d] Exit")
@@ -342,16 +503,14 @@ def user_interaction(args) -> None:
             if menu_option in ["a", "A", "b", "B", "c", "C", "d", "D"]:
                 break
             else:
-                print("Invalid menu option, please choose when of the menu options.")
+                print("Invalid menu option, please choose one of the menu options.")
 
         match menu_option:
             case "a" | "A":
                 mail_sending_cli(args)
             case "b" | "B":
-                print("Mail management")
                 mail_management_cli(args)
             case "c" | "C":
-                print("Mail searching")
                 mail_searching_cli(args)
             case "d" | "D":
                 sys.exit(0)
@@ -369,9 +528,12 @@ if __name__ == "__main__":
         help="IP address of the mail server machine.",
     )
     parser.add_argument(
-        "port", metavar="P", type=int, help="Port to connect mail server on."
+        "pop3_port", metavar="P", type=int, help="Port to connect mail POP3 server on."
     )
 
+    parser.add_argument(
+        "smtp_port", metavar="P", type=int, help="Port to connect mail SMTP server on."
+    )
     args: ProgramArgs = parser.parse_args()  # type: ignore
 
     user_interaction(args)
