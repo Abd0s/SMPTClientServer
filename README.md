@@ -7,7 +7,7 @@ A basic implementation of a Smtp server, POP3 server and a mail client to intera
 
 This project has only tested on Python 3.10 and Windows.
 
-Install the required dependencies using pip.
+Install the required dependencies using pip:
 ```bash
 pip install -r requirements.txt
 ```
