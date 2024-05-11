@@ -1,7 +1,7 @@
 [![Review Assignment Due Date](https://classroom.github.com/assets/deadline-readme-button-24ddc0f5d75046c5622901739e7c5dd533143b0c8e959d652212380cedb1ea36.svg)](https://classroom.github.com/a/Mp-Kos87)
 
 # About
-A basic implementation of a Smtp server, POP3 server and a mail client to interact with the servers
+A basic implementation of a Smtp server, POP3 server and a mail client to interact with the servers.
 
 # Requirements
 
@@ -13,7 +13,7 @@ pip install -r requirements.txt
 ```
 
 # Setup
-Add mail users by adding them to the `userinfo.txt` file in the `<username> <password` format and creating a `<username>/mailbox.txt` file inside the users directory
+Add mail users by adding them to the `userinfo.txt` file in the `<username> <password` format and creating a `users/<username>/mailbox.txt`.
 
 ## Usage
 
