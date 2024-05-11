@@ -4,14 +4,22 @@ import threading
 import logging
 import argparse
 import errno
+import pathlib
 
+import filelock
+
+import mailbox_manager
 import misc_utils
 
 logger = logging.getLogger(__name__)
 
+USERS_DIR = pathlib.Path(__file__).parent.parent.resolve() / "users"
+USERS_FILE = pathlib.Path(__file__).parent.parent.resolve() / "userinfo.txt"
+
 
 class ProgramArgs(argparse.Namespace):
     port: int
+
 
 class SmtpServer:
     def __init__(self, ip_address: str, port: int) -> None:
@@ -45,14 +53,11 @@ class SmtpServer:
         new_connection_socket.close()
 
 
-
 class ConnectionHandle(threading.Thread):
     COMMAND = 0
     DATA = 1
 
-    def __init__(
-        self, connection_socket: socket.socket, host: str
-    ) -> None:
+    def __init__(self, connection_socket: socket.socket, host: str) -> None:
         super().__init__(daemon=True)
 
         self.debug: bool = False
@@ -84,11 +89,6 @@ class ConnectionHandle(threading.Thread):
         self.send_response(f"220 {self.addr} Service Ready")
 
     def run(self):
-        # STRATEGY:
-        # IN A LOOP:
-        # READ UNTIL DELIMITER
-        # USE STRIP COMMAND KEYWORD TO DETERMINE COMMAND AND CALL APPRIOPRIATE COMMAND HANDLER
-
         try:
             while (data := self._read_until(self.terminator)) is not None:
                 logger.debug(f"Data: {data}")
@@ -125,9 +125,7 @@ class ConnectionHandle(threading.Thread):
                         else:
                             mail_data.append(line)
                     received_data = self._newline.join(mail_data)
-                    status = self.process_mail(
-                        self.peer, self.mailfrom, self.rcpttos, received_data
-                    )
+                    status = self.process_mail(self.peer, self.rcpttos, received_data)
                     self._set_post_data_state()
                     if not status:
                         self.send_response("250 OK")
@@ -141,10 +139,24 @@ class ConnectionHandle(threading.Thread):
                 exc_info=e,
             )
             self.conn.close()
-            
-    def process_mail(self, peer, mailfrom, rcpttos, data) -> str | None:
-        pass
-    
+
+    def process_mail(self, peer: str, rcpttos: list[str], data: str) -> str | None:
+        users = mailbox_manager.get_users(USERS_FILE)
+        if (rcpttos in users) or (rcpttos == users):
+            for rcpt in rcpttos:
+                self.mailbox_lock = mailbox_manager.get_lock(rcpt, USERS_DIR)
+                try:
+                    self.mailbox_lock.acquire(timeout=1)
+                    mailbox_manager.add_mail(USERS_DIR, rcpt, data)
+                except filelock.Timeout:
+                    return f"452 Requested action failed: failed to aquire lock for user {rcpt}"
+                except Exception:
+                    self.mailbox_lock.release()
+                else:
+                    self.mailbox_lock.release()
+        else:
+            return "554 No valid recipients"
+
     def close(self) -> None:
         logger.debug("Socket has been closed")
         self.conn.close()
@@ -269,6 +281,9 @@ class ConnectionHandle(threading.Thread):
                 "555 RCPT TO parameters not recognized or not implemented"
             )
             return
+        if address not in mailbox_manager.get_users(USERS_FILE):
+            self.send_response("550 No such user")
+            return
         self.rcpttos.append(address)
         self.send_response("250 Recipient Ok")
 
@@ -293,7 +308,6 @@ class ConnectionHandle(threading.Thread):
         self.send_response(f"221 {self.addr} Closing connection")
         self.close()
 
-    # TODO FIX OR REMOVE AS POTENTIALLY MAKES NO SENSE ATM
     def smtp_VRFY(self, data: str) -> None:
         if data:
             address, params = self._getaddr(data)
@@ -303,7 +317,7 @@ class ConnectionHandle(threading.Thread):
                     "and attempt delivery"
                 )
             else:
-                self.send_response("502 Could not VRFY %s" % data)
+                self.send_response(f"502 Could not VRFY {data}")
         else:
             self.send_response("501 Syntax: VRFY <address>")
 

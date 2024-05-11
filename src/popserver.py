@@ -13,7 +13,8 @@ import mailbox_manager
 
 logger = logging.getLogger(__name__)
 
-USERSFILE = pathlib.Path(__file__).parent.parent.resolve() / "users"
+USERS_DIR = pathlib.Path(__file__).parent.parent.resolve() / "users"
+USERS_FILE = pathlib.Path(__file__).parent.parent.resolve() / "userinfo.txt"
 
 class ProgramArgs(argparse.Namespace):
     port: int
@@ -92,7 +93,39 @@ class ConnectionHandle(threading.Thread):
         self.send_postive_response("POP3 server ready")
 
     def run(self):
-        
+        try:
+            while (data := self._read_until(self.terminator)) is not None:
+                logger.debug(f"Data: {data}")
+                # Handle case where data is an empty string
+                if not data:
+                    self.send_negative_response("Bad syntax")
+                    continue
+                # Find command keyword
+                i = data.find(" ")
+                # Handle case where there is only a command keyword
+                if i < 0:
+                    command = data.upper()
+                    arg = None
+                # Handle case where there is a command keyword and additional arguments
+                else:
+                    command = data[:i].upper()
+                    arg = data[i + 1 :].strip().split()
+                # Find and call method to handle command
+                method = getattr(self, "pop3_" + command, None)
+                if not method:
+                    self.send_negative_response(
+                        f'command "{command}" not recognized'
+                    )
+                    continue
+                method(arg)
+        except Exception as e:
+            logger.error(
+                f"En error occured in the connection handle for peer {self.peer}",
+                exc_info=e,
+            )
+            if self.pop3_state == self.TRANSACTION and self.mailbox_lock:
+                self.mailbox_lock.release()
+            self.conn.close()   
     
     def _reset_state(self) -> None:
         self.pop3_state: int = self.AUTH
@@ -107,7 +140,20 @@ class ConnectionHandle(threading.Thread):
     def send_response(self, msg: str) -> None:
         self.conn.sendall(bytes(msg + "\r\n", encoding="utf-8"))
 
-    def read_until(self, sequence: bytes) -> str | None:
+    def send_data(self, data: str) -> None:
+        # Add extraneous carriage returns and transparency
+        mail_data = []
+        for line in data.split(self._newline):
+            if line and line[0] == self._dotsep:
+                mail_data.append(self._dotsep + line)
+            else:
+                mail_data.append(line)
+        mail_str = (
+            self._linesep.join(mail_data) + self._linesep + self._dotsep + self._linesep
+        )
+        self.conn.sendall(bytes(mail_str, encoding="utf-8"))    
+        
+    def _read_until(self, sequence: bytes) -> str | None:
         # Read data into buffer as it is available
         # Check if buffer contains `character`
         # Trim buffer until `character` and return the data
@@ -121,7 +167,7 @@ class ConnectionHandle(threading.Thread):
 
     def _load_maildrop(self, username: str) -> None:
         if self.mailbox_lock.is_locked:
-            self.maildrop = mailbox_manager.get_all_mails(USERSFILE, username)
+            self.maildrop = mailbox_manager.get_all_mails(USERS_DIR, username)
         else:
             logger.error("Tried to aquire maildrop without holding the lock")
             
@@ -137,13 +183,19 @@ class ConnectionHandle(threading.Thread):
             self.send_postive_response("POP3 server signing off")
             self.close()
         if self.pop3_state == self.TRANSACTION:
-            
+            deleted_mails = [index for (index, mail) in enumerate(self.maildrop) if not mail]
+            mailbox_manager.delete_mail(USERS_DIR, self.username, deleted_mails)
+            self.mailbox_lock.release()
+            self.send_postive_response("POP3 Server signing off")
+            self.close()
+        else:
+            self.close()
 
     # AUTH STATE ONLY COMMANDS
     def pop3_USER(self, args: list[str]) -> None:
         if self.auth_state == self.NO_STATE:
             try:
-                if args[0] in mailbox_manager.get_users(USERSFILE):
+                if args[0] in mailbox_manager.get_users(USERS_FILE):
                     self.send_postive_response(f"{args[0]} is a valid mailbox")
                     self.auth_state = self.USER
                     self.username = args[0]
@@ -157,8 +209,8 @@ class ConnectionHandle(threading.Thread):
     def pop3_PASS(self, args: list[str]) -> None:
         if self.auth_state == self.USER:
             try:
-                if mailbox_manager.validate_user(USERSFILE, self.username, args[0]):
-                    self.mailbox_lock = mailbox_manager.get_lock(self.username, USERSFILE)
+                if mailbox_manager.validate_user(USERS_FILE, self.username, args[0]):
+                    self.mailbox_lock = mailbox_manager.get_lock(self.username, USERS_DIR)
                     try:
                         self.mailbox_lock.acquire(blocking=False)
                         self.send_postive_response("Maildrop locked and ready")
@@ -180,7 +232,7 @@ class ConnectionHandle(threading.Thread):
     # TRANSACTION STATE ONLY COMMANDS
     def pop3_STAT(self, args: list[str]) -> None:
         if self.pop3_state == self.TRANSACTION:
-            self.send_postive_response(f"{len([mail for mail in self.maildrop if mail])} {sum([len(mail.encode("utf-8")) for mail in self.maildrop if mail])}")
+            self.send_postive_response(f"{len([mail for mail in self.maildrop if mail])} {sum([len(mail.encode('utf-8')) for mail in self.maildrop if mail])}")
         else:
             self.send_negative_response("Not in transaction state, use USER/PASS first to authenticate")
 
@@ -188,7 +240,7 @@ class ConnectionHandle(threading.Thread):
         if self.pop3_state == self.TRANSACTION:
             if not args:
                 try:
-                    self.send_postive_response(f"{args[0]} {len(self.maildrop[int(args[0]) + 1].encode("utf-8"))}")
+                    self.send_postive_response(f"{args[0]} {len(self.maildrop[int(args[0]) + 1].encode('utf-8'))}")
                 except IndexError:
                     self.send_negative_response(f"No such mail, only {len(self.maildrop)} mails in maildro")
                 except ValueError:
@@ -196,7 +248,7 @@ class ConnectionHandle(threading.Thread):
             else:
                 self.send_postive_response(f"{len(self.maildrop)} mails")
                 for index, mail in enumerate(self.maildrop, 1):
-                    self.send_response(f"{index} {len(mail.encode("utf-8"))}")
+                    self.send_response(f"{index} {len(mail.encode('utf-8'))}")
                 self.send_response(".\r\n")
         else:
             self.send_negative_response("Not in transaction state, use USER/PASS first to authenticate")
@@ -205,13 +257,11 @@ class ConnectionHandle(threading.Thread):
         if self.pop3_state == self.TRANSACTION:
             if args:
                 try:
-                    if self.maildrop[int(args[0]) - 1)]:
-                        self.send_postive_response(f"{len(self.maildrop[int(args[0]) - 1].encode("utf-8"))}")
-                        self.send_response()
-                    
+                    if self.maildrop[int(args[0]) - 1]:
+                        self.send_postive_response(f"{len(self.maildrop[int(args[0]) - 1].encode('utf-8'))}")
+                        self.send_data(self.maildrop[int(args[0]) -1])
                 except IndexError:
                     self.send_negative_response("Invalid mail number, nu such mail")
-
             else:
                 self.send_negative_response("Invalid argument, requires a valid mail number")
 
@@ -219,7 +269,6 @@ class ConnectionHandle(threading.Thread):
             self.send_negative_response("Not in transaction state, use USER/PASS first to authenticate")
             
             
-    # TODO FIX NEGARTIVE INDEXES
     def pop3_DELE(self, args: list[str]) -> None:
         if self.pop3_state == self.TRANSACTION:
             if args:

@@ -15,7 +15,7 @@ class BaseClient:
         self.server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.debug: bool = debug
 
-    def read_until(self, sequence: bytes) -> str | None:
+    def _read_until(self, sequence: bytes) -> str | None:
         # Read data into buffer as it is available
         # Check if buffer contains `character`
         # Trim buffer until `character` and return the data
@@ -28,6 +28,9 @@ class BaseClient:
         if self.debug:
             print(f"DEBUG | READ DATA: {until_data.decode()}")
         return until_data.decode()
+
+    def send_command(self, command: str) -> None:
+        self.server_socket.sendall(bytes(command + "\r\n", encoding="utf-8"))
 
 
 class SmptClient(BaseClient):
@@ -52,14 +55,11 @@ class SmptClient(BaseClient):
         self.terminator: bytes = b"\r\n"
 
         # 220 Service ready response on connection with the server
-        self._handle_response("220", self.read_until(self.terminator))
+        self._handle_response("220")
 
         self.smtp_HELO()
-        
-        print("Smpt server set up succesfully")
 
-    def send_command(self, command: str) -> None:
-        self.server_socket.sendall(bytes(command + "\r\n", encoding="utf-8"))
+        print("Smpt client set up succesfully")
 
     def send_data(self, data: str) -> None:
         # Add extraneous carriage returns and transparency according
@@ -78,14 +78,17 @@ class SmptClient(BaseClient):
     def close(self) -> None:
         self.smtp_QUIT()
         self.server_socket.close()
-        
+
     def send_mail(self, sender: str, receiver: str, subject: str, message: str) -> None:
         self.smtp_MAIL(sender)
         self.smtp_RCPT(receiver)
-        email_header: str = f"From: {sender}\n" + f"To: {receiver}\n" + f"Subject: {subject}\n"
+        email_header: str = (
+            f"From: {sender}\n" + f"To: {receiver}\n" + f"Subject: {subject}\n"
+        )
         self.smtp_DATA(email_header + message)
-        
-    def _handle_response(self, expected_code: str, response: str | None) -> None:
+
+    def _handle_response(self, expected_code: str) -> None:
+        response = self._read_until(self.terminator)
         if response is None:
             raise RuntimeError("Unexpected socket closure")
         elif not response.startswith(expected_code):
@@ -94,28 +97,28 @@ class SmptClient(BaseClient):
     # PROTOCOL IMPLEMENTATION
     def smtp_HELO(self) -> None:
         self.send_command(f"HELO {self.addr}")
-        self._handle_response("250", self.read_until(self.terminator))
+        self._handle_response("250")
 
     def smtp_RCPT(self, receiver: str) -> None:
         self.send_command(f"RCPT TO: <{receiver}>")
-        self._handle_response("250", self.read_until(self.terminator))
+        self._handle_response("250")
 
     def smtp_MAIL(self, sender: str) -> None:
         self.send_command(f"MAIL FROM: <{sender}>")
-        self._handle_response("250", self.read_until(self.terminator))
+        self._handle_response("250")
 
     def smtp_DATA(self, data: str) -> None:
         self.send_command("DATA")
-        self._handle_response("354", self.read_until(self.terminator))
+        self._handle_response("354")
         self.send_data(data)
-        self._handle_response("250", self.read_until(self.terminator))
+        self._handle_response("250")
 
     def smtp_QUIT(self) -> None:
         self.send_command("QUIT")
-        self._handle_response("221", self.read_until(self.terminator))
+        self._handle_response("221")
 
 
-class PopClient(BaseClient):
+class Pop3Client(BaseClient):
     def __init__(self, ip_address: str, port: int) -> None:
         super().__init__(debug=True)
 
@@ -137,10 +140,122 @@ class PopClient(BaseClient):
         self._newline: str = "\n"
         self.terminator: bytes = b"\r\n"
 
-    
+        # Handle initial greeting response
+        status, message = self._handle_response()
+        if not status:
+            raise RuntimeError(f"Unexpected negative greeting from server: {message}")
+
+    def _handle_response(self) -> tuple[bool, str]:
+        response = self._read_until(self.terminator)
+        if response is None:
+            raise RuntimeError("Unexpected socket closure")
+        if response.startswith("+OK"):
+            try:
+                return (True, response.split(" ", 1)[1])
+            except IndexError:
+                return (True, "")
+        elif response.startswith("-ERR"):
+            try:
+                return (False, response.split(" ", 1)[1])
+            except IndexError:
+                return (False, "")
+        else:
+            raise RuntimeError(f"Unexpected response: {response}")
+
+    def authenticate(self, user: str, password: str) -> None:
+        status, message = self.pop3_USER(user)
+        if not status:
+            raise RuntimeError(f"Failed to authenticate with POP3 server: {message}")
+        status, message = self.pop3_PASS(password)
+        if not status:
+            raise RuntimeError(f"Failed to authenticate with POP3 server: {message}")
+
+    def close(self) -> None:
+        self.pop3_QUIT()
+        self.server_socket.close()    
+        
+    def read_data(self) -> str:        
+        # Remove extraneous carriage returns and de-transparency according
+        data = self._read_until(b"\r\n.\r\n")
+        if data:
+            mail_data = []
+            for line in data.split(self._linesep):
+                if line and line[0] == self._dotsep:
+                    mail_data.append(line[1:])
+                else:
+                    mail_data.append(line)
+            return self._newline.join(mail_data)
+        else:
+            raise RuntimeError("Unexpected socket closure")
+
+    def pop3_USER(self, user: str) -> tuple[bool, str]:
+        self.send_command(f"USER {user}")
+        return self._handle_response()
+
+    def pop3_PASS(self, passowrd: str) -> tuple[bool, str]:
+        self.send_command(f"PASS {passowrd}")
+        return self._handle_response()
+
+    def pop3_STAT(self) -> None:
+        self.send_command("STAT")
+        response = self._read_until(self.terminator)
+        if response is None:
+            raise RuntimeError("Unexpected socket closure")
+        else:
+            print(response)
+
+    def pop3_LIST(self, mail_n: int | None = None) -> str:
+        if mail_n:
+            self.send_command(f"LIST {mail_n}")
+            status, message = self._handle_response()
+            if status:
+                return message
+            else:
+                raise RuntimeError(f"Failed LIST command: {message}")
+        else:
+            self.send_command("LIST")
+            status, message = self._handle_response()
+            if status:
+                return self.read_data()
+            else:
+                raise RuntimeError(f"Failed LIST command: {message}")
+
+    def pop3_RETR(self, mail_n: int) -> str:
+        self.send_command(f"RETR {mail_n}")
+
+        status, message = self._handle_response()
+        if status:
+            return self.read_data()
+        else:
+            raise RuntimeError(f"Failed RETR command: {message}")
+
+    def pop3_DELE(self, mail_n: int) -> None:
+        self.send_command(f"DELE {mail_n}")
+        response = self._read_until(self.terminator)
+        if response is None:
+            raise RuntimeError("Unexpected socket closure")
+        else:
+            print(response)
+
+    def pop3_RSET(self) -> None:
+        self.send_command("RSET")
+        response = self._read_until(self.terminator)
+        if response is None:
+            raise RuntimeError("Unexpected socket closure")
+        else:
+            print(response)
+
+    def pop3_QUIT(self) -> None:
+        self.send_command("QUIT")
+        response = self._read_until(self.terminator)
+        if response is None:
+            raise RuntimeError("Unexpected socket closure")
+        else:
+            print(response)
+
+
 def mail_sending_cli(args: ProgramArgs) -> None:
     # Collect mail information
-    # TODO ADD FORMAT VALIDATION FOR ADDRESSES
     sender: str = input("From: ")
     receiver: str = input("To: ")
     subject: str = input("Subject: ")
@@ -173,17 +288,40 @@ def mail_sending_cli(args: ProgramArgs) -> None:
     except Exception:
         print("Error sending mail")
         traceback.print_exc()
+        smpt_client.close()
         return
 
     smpt_client.close()
 
 
-def mail_management_cli() -> None:
+def mail_management_cli(args) -> None:
     user_name = input("Enter username: ")
     password = input("Enter password: ")
 
 
-def mail_searching_cli() -> None:
+    try:
+        pop3_client = Pop3Client(args.ip_address, args.port)
+    except Exception:
+        print("Error creating smpt client")
+        traceback.print_exc()
+        return
+
+    try:
+        pop3_client.authenticate(user_name, password)
+    except RuntimeError as e:
+        print(repr(e))
+        pop3_client.close()
+        return
+
+    print(f"Succesfully authenticated as {user_name}!")
+
+    pop3_client.pop3_STAT()
+    pop3_client.pop3_LIST()
+    print(pop3_client.pop3_RETR(1))
+
+    pop3_client.close()
+
+def mail_searching_cli(args) -> None:
     pass
 
 
@@ -211,8 +349,10 @@ def user_interaction(args) -> None:
                 mail_sending_cli(args)
             case "b" | "B":
                 print("Mail management")
+                mail_management_cli(args)
             case "c" | "C":
                 print("Mail searching")
+                mail_searching_cli(args)
             case "d" | "D":
                 sys.exit(0)
 

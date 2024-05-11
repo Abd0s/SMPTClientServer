@@ -90,14 +90,11 @@ def get_mail(users: pathlib.Path, username: str, mail_n: int) -> str | None:
     return get_all_mails(users, username)[mail_n]
 
 
-def delete_mail(users: pathlib.Path, username: str, mail_n: int) -> None:
+def delete_mail(users: pathlib.Path, username: str, mail_n: list[int]) -> None:
     mails = get_all_mails(users, username)
-    mails.pop(mail_n)
+    for mail in mail_n:
+        mails.pop(mail)
 
     with open(users / pathlib.Path(username) / "mailbox.txt", "w") as f:
         f.write("\n.\n".join(mails))
         f.write("\n.\n")
-
-
-def get_stats():
-    pass
